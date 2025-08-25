@@ -8,7 +8,7 @@ repository = "https://thunderstore.io"
 namespace = "boxofbiscuits97"
 name = "PingDistance"
 description = "See the distance to pings."
-websiteUrl = "" # TODO: Add a link to your mod repository here (optional)
+websiteUrl = "https://github.com/Boxofbiscuits97/PEAK-PingDistance"
 containsNsfwContent = false
 
 [package.dependencies]
