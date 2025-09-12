@@ -1,6 +1,6 @@
 ﻿using BepInEx;
 using BepInEx.Logging;
-using System.Reflection;
+using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 using TMPro;
@@ -11,101 +11,109 @@ namespace PingDistance;
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log { get; private set; } = null!;
-    private static GameObject? distanceText;
-    private static GameObject? distanceInstance;
+    private static GameObject? templateText;
+    private static readonly Dictionary<Character, GameObject> distanceInstances = [];
     private static GameObject? PingDistanceCanvas;
 
     private void Awake()
     {
         Log = Logger;
 
-        Log.LogInfo($"Plugin {Name} is loaded!");
+        Log.LogInfo($"Plugin {Name} Version {Version} is loaded!");
 
         Harmony.CreateAndPatchAll(typeof(Plugin));
     }
 
+    [HarmonyPatch(typeof(PointPinger), nameof(PointPinger.Awake))]
     [HarmonyPrefix]
-    [HarmonyPatch(typeof(PointPinger), nameof(PointPinger.ReceivePoint_Rpc))]
-    private static void PingDistancePatch(PointPinger __instance, ref Vector3 __0, ref Vector3 __1)
+    private static void PointPinger_Awake_Prefix(PointPinger __instance)
     {
-        Vector3 point = __0;
-        Vector3 hitNormal = __1;
-
-        Vector3 position = new Vector3(point.x + hitNormal.x, point.y + hitNormal.y, point.z + hitNormal.z);
-
-        PingDistance distanceComponent;
-
         if (PingDistanceCanvas == null)
         {
-            GameObject GUIManager = GameObject.Find("GAME/GUIManager");
-            GameObject NamesCanvas = GameObject.Find("GAME/GUIManager/Canvas_Names");
-            PingDistanceCanvas = Instantiate(NamesCanvas, GUIManager.transform);
-            PingDistanceCanvas.name = "Canvas_PingDistance";
+            CreatePingDistanceCanvas();
+            distanceInstances.Clear();
+        }
+    }
 
-            UIPlayerNames component;
-            PingDistanceCanvas.TryGetComponent<UIPlayerNames>(out component);
-            Destroy(component);
-
-            Log.LogInfo(PingDistanceCanvas.transform.childCount);
-            distanceText = PingDistanceCanvas.transform.GetChild(0).gameObject;
-            distanceText.name = "DistanceText";
-
-            for (int i = 0; i < PingDistanceCanvas.transform.childCount; i++)
-            {
-                GameObject child = PingDistanceCanvas.transform.GetChild(i).gameObject;
-                if (child.name.Contains("UI_PlayerName")) Destroy(child);
-            }
-
-            PlayerName nameComponent;
-            distanceText.TryGetComponent<PlayerName>(out nameComponent);
-            Destroy(nameComponent);
-
-            Destroy(distanceText.transform.GetChild(0).gameObject);
-
-            distanceText.AddComponent<PingDistance>();
-            distanceText.SetActive(false);
+    [HarmonyPatch(typeof(PointPinger), nameof(PointPinger.ReceivePoint_Rpc))]
+    [HarmonyPrefix]
+    private static void PointPinger_ReceivePoint_Rpc_Prefix(PointPinger __instance, ref Vector3 point, ref Vector3 hitNormal)
+    {
+        if (PingDistanceCanvas == null || templateText == null)
+        {
+            Log.LogError("PingDistanceCanvas or templateText is not instantiated");
+            return;
         }
 
-        if (distanceText == null) return;
+        Character character = __instance.character;
+        Vector3 position = point + hitNormal;
 
-        if (distanceInstance != null) Destroy(distanceInstance);
+        if (distanceInstances.TryGetValue(character, out GameObject? oldInstance) && oldInstance != null)
+        {
+            Destroy(oldInstance);
+        }
 
-        distanceInstance = Instantiate(distanceText, PingDistanceCanvas.transform);
-        distanceInstance.SetActive(true);
+        GameObject newInstance = Instantiate(templateText, PingDistanceCanvas.transform);
+        newInstance.SetActive(true);
 
-        distanceComponent = distanceInstance.GetComponent<PingDistance>();
+        PingDistance distanceComponent = newInstance.GetComponent<PingDistance>();
         distanceComponent.position = position;
-        distanceComponent.character = __instance.character;
+        distanceComponent.character = character;
 
-        Destroy(distanceInstance, 1.25f);
+        distanceInstances[character] = newInstance;
+
+        Destroy(newInstance, 1.25f);
+    }
+
+    private static void CreatePingDistanceCanvas()
+    {
+        GameObject GUIManager = GameObject.Find("GAME/GUIManager");
+        GameObject NamesCanvas = GameObject.Find("GAME/GUIManager/Canvas_Names");
+        PingDistanceCanvas = Instantiate(NamesCanvas, GUIManager.transform);
+        PingDistanceCanvas.name = "Canvas_PingDistance";
+
+        if (PingDistanceCanvas.TryGetComponent<UIPlayerNames>(out UIPlayerNames component))
+            Destroy(component);
+
+        templateText = PingDistanceCanvas.transform.GetChild(0).gameObject;
+        Destroy(templateText.transform.GetChild(0).gameObject);
+        if (templateText.TryGetComponent<PlayerName>(out PlayerName? nameComponent))
+            Destroy(nameComponent);
+
+        templateText.name = "DistanceText";
+        templateText.AddComponent<PingDistance>();
+        templateText.SetActive(false);
+
+        for (int i = 0; i < PingDistanceCanvas.transform.childCount; i++)
+        {
+            GameObject child = PingDistanceCanvas.transform.GetChild(i).gameObject;
+            if (child.name.Contains("UI_PlayerName")) Destroy(child);
+        }
+
+        Log.LogInfo("PingDistanceCanvas created");
     }
 }
 
 public class PingDistance : MonoBehaviour
 {
-    public float scaleFactor = 0.3f;
     public Vector3 position;
     public Character? character;
-
     private TextMeshProUGUI? tmp;
 
     void LateUpdate()
     {
         if (Camera.main == null) return;
-        if (tmp == null) tmp = GetComponentInChildren<TextMeshProUGUI>();
-        
 
+        Color color = character != null ? character.refs.customization.PlayerColor : Color.white;
+        float distance = Mathf.Round(Vector3.Distance(position, Camera.main.transform.position));
         float angle = Vector3.Angle(Camera.main.transform.forward, position - Camera.main.transform.position);
-        tmp.gameObject.SetActive(angle < 90f);
-
-        
-        tmp.fontSize = 30f;
+        if (tmp == null) tmp = GetComponentInChildren<TextMeshProUGUI>();
 
         transform.position = Camera.main.WorldToScreenPoint(position);
 
-        float distance = Vector3.Distance(position, Camera.main.transform.position);
-        distance = Mathf.Round(distance);
-
-        tmp.text = distance.ToString() + "m";
+        tmp.fontSize = 30f;
+        tmp.color = color;
+        tmp.text = $"{distance}m";
+        tmp.gameObject.SetActive(angle < 90f);
     }
 }
