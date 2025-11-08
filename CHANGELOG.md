@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0
+- Added ping distances for each player with their respective colors
+- Fixed issue with multiplayer pings
+
 ## 0.2.1
 - Added Github Link
 
